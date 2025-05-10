@@ -4,7 +4,7 @@ A TypeScript-based backend CLI application with game functionality and database 
 
 ## Prerequisites
 
-- Node.js
+- Node.js (v22 or higher)
 - PostgreSQL
 - TypeScript
 
