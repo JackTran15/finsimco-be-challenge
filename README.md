@@ -1,125 +1,61 @@
 # Backend CLI
 
-Backend CLI application for simulation systems.
+A TypeScript-based backend CLI application with game functionality and database integration.
 
-## Setup
+## Prerequisites
 
-### Environment Variables
+- Node.js
+- PostgreSQL
+- TypeScript
 
-This project uses environment variables for configuration. Create a `.env` file in the root directory with the following content:
+## Installation
 
+1. Clone the repository
+2. Install dependencies:
 ```bash
-# Database Configuration
-DB_USER=postgres
-DB_PASSWORD=postgres
-DB_NAME=simulation_db
-DB_PORT=5432
-
-# Adminer Configuration
-ADMINER_PORT=8082
+npm install
 ```
 
-You can create this file manually or use the following command:
+## Environment Setup
 
-```bash
-# Create .env file with default values
-cat > .env << EOF
-# Database Configuration
-DB_USER=postgres
-DB_PASSWORD=postgres
-DB_NAME=simulation_db
-DB_PORT=5432
-
-# Adminer Configuration
-ADMINER_PORT=8082
-EOF
+Create a `.env` file in the root directory with your database configuration:
+```env
+DB_HOST=your_host
+DB_PORT=your_port
+DB_NAME=your_database
+DB_USER=your_username
+DB_PASSWORD=your_password
 ```
 
-You can modify these values according to your needs. If you don't create a `.env` file, the application will use the default values specified in the `docker-compose.yml` file.
+## Available Scripts
 
-### Database Setup with Docker
+### Development
+- `yarn build` - Compile TypeScript to JavaScript
+- `yarn dev:game1:team1` - Run game 1 - team 1 game from ts code
+- `yarn dev:game1:team2` - Run game 1 - team 2 game from ts code
+- `yarn dev:game2:team2` - Run game 2 - team 2 game from ts code
+- `yarn dev:game2:team2` - Run game 2 - team 2 game from ts code
+- `yarn db:test` - Run database tests
 
-This project uses PostgreSQL for data storage. You can easily start a PostgreSQL database using Docker.
+### Production
+- `yarn build` - Compile TypeScript to JavaScript
+- `yarn start:game1:team1` - Run game 1 - team 1 game from compiled code
+- `yarn start:game1:team2` - Run game 1 - team 2 game from compiled code
+- `yarn start:game2:team2` - Run game 2 - team 2 game from compiled code
+- `yarn start:game2:team2` - Run game 2 - team 2 game from compiled code
 
-1. Make sure you have Docker and Docker Compose installed:
-   - [Docker Installation Guide](https://docs.docker.com/get-docker/)
-   - [Docker Compose Installation Guide](https://docs.docker.com/compose/install/)
+## Dependencies
 
-2. Start the database container:
-   ```bash
-   docker compose up -d
-   ```
+### Main Dependencies
+- dotenv - Environment variable management
+- inquirer - Interactive command line user interface
+- pg - PostgreSQL client
+- sequelize - ORM for database operations
+- uuid - Unique identifier generation
+- chalk - Terminal string styling
 
-3. To stop the database:
-   ```bash
-   docker compose down
-   ```
-
-4. To delete all data and restart clean:
-   ```bash
-   docker compose down -v
-   docker compose up -d
-   ```
-
-### Environment Configuration
-
-The default database configuration in the application uses:
-- Host: localhost
-- Port: 5432
-- Username: postgres
-- Password: postgres
-- Database: simulation_db
-
-You can modify these in `src/db/sequelize.ts` if needed.
-
-### Running the Application
-
-```bash
-# Install dependencies
-yarn
-
-# Build the TypeScript code
-yarn build
-
-# Run the compiled application
-yarn start
-
-# For development with automatic reloading
-yarn dev
-
-# For TypeScript compilation in watch mode
-yarn watch
-```
-
-The `yarn dev` command uses ts-node which runs the TypeScript code directly.
-
-If you want to run the TypeScript compiler in watch mode separately, use `yarn watch` which uses nodemon to automatically restart the application when files change.
-
-### Running the Game
-
-The application includes a simulation game with two teams. You can run either team's interface using the following commands:
-
-```bash
-# Run Team 1's interface
-yarn game1:team1
-
-# Run Team 2's interface
-yarn game1:team2
-```
-
-Each team has its own interface and functionality. Make sure to follow the prompts in each interface to participate in the simulation.
-
-### Running Team 1 CLI
-
-To run the Team 1 CLI, which allows you to enter financial terms and calculate valuations:
-
-```bash
-yarn team1
-```
-
-This will:
-1. Prompt you to enter values for EBITDA, Interest Rate, Multiple, and Factor Score
-2. Store these values in the database
-3. Calculate the valuation using the formula: `Valuation = EBITDA × Multiple × Factor Score`
-4. Allow you to edit the inputs if needed
-5. Reset Team 2's approval status for each field when changes are made 
+### Development Dependencies
+- TypeScript
+- ts-node - TypeScript execution engine
+- nodemon - Development server with auto-reload
+- Various TypeScript type definitions

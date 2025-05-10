@@ -1,10 +1,8 @@
 import { Sequelize } from 'sequelize';
-
 import { config } from 'dotenv';
 
 config();
 
-// Database configuration - can be overridden with environment variables
 const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432'),
@@ -13,9 +11,7 @@ const dbConfig = {
   database: process.env.DB_NAME || 'postgres',
 };
 
-console.log(dbConfig);
 
-// First connect to the default postgres database
 const defaultSequelize = new Sequelize({
   dialect: 'postgres',
   host: dbConfig.host,
@@ -26,14 +22,12 @@ const defaultSequelize = new Sequelize({
   logging: false,
 });
 
-// Then create our application database if it doesn't exist
 const createDatabase = async () => {
   try {
     await defaultSequelize.authenticate();
     await defaultSequelize.query(`CREATE DATABASE ${dbConfig.database};`);
     console.log(`Database ${dbConfig.database} created successfully.`);
   } catch (error: any) {
-    // If database already exists, that's fine
     if (error.message.includes('already exists')) {
       console.log(`Database ${dbConfig.database} already exists.`);
     } else {
@@ -44,10 +38,8 @@ const createDatabase = async () => {
   }
 };
 
-// Create the database if it doesn't exist
 createDatabase();
 
-// Export the main sequelize instance for the application
 export const sequelize = new Sequelize({
   dialect: 'postgres',
   host: dbConfig.host,
@@ -57,16 +49,6 @@ export const sequelize = new Sequelize({
   database: dbConfig.database,
   logging: false,
   sync: {
-    force: true,
+    force: false,
   },
-  pool: {
-    max: 5,
-    min: 0,
-    acquire: 60000,
-    idle: 10000
-  },
-  retry: {
-    max: 5,
-    match: [/Deadlock/i, /ConnectionError/],
-  }
 }); 

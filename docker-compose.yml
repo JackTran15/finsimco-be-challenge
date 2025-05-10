@@ -10,17 +10,15 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: finsimco
     ports:
-      - 5432:5432
+      - 5444:5432
     volumes:
-      - postgres_data:/Users/jacktran/Documents/backend-assignments/finsimco/postgres_data
+      - postgres_data:/Documents/backend-assignments/postgres_data
 
   adminer:
     image: adminer
-    container_name: simulation_adminer
+    container_name: finsimco_adminer
     ports:
       - 8082:8080
-    environment:
-      ADMINER_DEFAULT_SERVER: db
 
 volumes:
   postgres_data: 

@@ -1,307 +1,441 @@
-import inquirer from 'inquirer';
-import chalk from 'chalk';
-import { Input } from '../db/models/Input';
-import { Approval } from '../db/models/Approval';
-import { Output } from '../db/models/Output';
-import { initDb, closeDb } from '../db';
-import { sequelize } from '../db/sequelize';
-import dotenv from 'dotenv';
+import inquirer from "inquirer";
+import chalk from "chalk";
+import { Input } from "./db/models/Input";
+import { initDb, closeDb } from "./db";
+import { sequelize } from "./db/sequelize";
+import dotenv from "dotenv";
+import { upsertInput, ExtendedInputRaw } from "./helpers/inputs.helper";
+import { getSessionContext } from "./helpers/common.helper";
+import { displayInputTable } from "./helpers/display.helper";
+import { upsertOutput, ExtendedOutputRaw } from "./helpers/output.helper";
+import { upsertApproval } from "./helpers/approvals.helper";
 
 dotenv.config();
 
-const SESSION_ID = process.env.DEFAULT_SESSION_ID || 'default_session';
-const pollingRefreshRateInMs = 1500;
-
-const fields = ['EBITDA', 'Interest Rate', 'Multiple', 'Factor Score'];
-const units = ['M$', '%', 'x', ''];
+const SESSION_ID = process.env.DEFAULT_SESSION_ID || "default_session";
 const TEAM_ID = 1;
+const POLLING_INTERVAL = 1500; // 1.5 seconds
 
-const askInputs = async (teamId: number): Promise<Record<string, number>> => {
-    const inputs: Record<string, number> = {};
+// Global variables for polling control
+let isEditing = false;
+let pollingInterval: NodeJS.Timeout | null = null;
 
-    // Get current approval status
-    const approvals = await Approval.findAll({
-        where: {
-            teamId: TEAM_ID,
-            sessionId: SESSION_ID
+/**
+ * Edits a single field and updates it immediately
+ */
+const editField = async (
+  field: (typeof Input.FIELDS)[number],
+  existingInputs: any[],
+  outputId: string
+): Promise<boolean> => {
+  const index = Input.FIELDS.indexOf(field);
+  const unit = Input.UNITS[index];
+  const existing = existingInputs.find((input) => input.fieldName === field);
+  const unitDisplay = unit ? `(${unit})` : "";
+
+  // Get the approval status for this field
+  const { approvals } = await getSessionContext(SESSION_ID, TEAM_ID);
+  const approvalStatus = approvals.find(a => a.fieldName === field)?.isApproved;
+
+  // Prompt for value
+  const { value } = await inquirer.prompt([
+    {
+      type: "input",
+      name: "value",
+      message: `Enter value for ${field} ${unitDisplay}:`,
+      default: existing?.value?.toString(),
+      validate: (input) => {
+        if (input === "" && !existing) {
+          return "A value is required for new fields";
         }
-    });
+        if (input === "") return true;
+        return !isNaN(Number(input)) && Number(input) > 0
+          ? true
+          : "Must be a number greater than 0";
+      },
+    },
+  ]);
 
-    for (let index = 0; index < fields.length; index++) {
-        const field = fields[index];
-        const unit = units[index];
-        const existing = await Input.findOne({
-            where: {
-                teamId,
-                fieldName: field,
-                sessionId: SESSION_ID
-            },
-            order: [['updatedAt', 'DESC']],
-        });
+  // If user just pressed enter on existing value
+  if (value === "" && existing) {
+    return false; // No changes made
+  }
 
-        const approvalStatus = approvals.find(a => a.fieldName === field)?.status;
-        const statusDisplay = approvalStatus ? chalk.green('OK') : chalk.yellow('TBD');
-        const unitDisplay = unit ? `(${unit})` : '';
+  const newValue = parseFloat(value);
 
-        const { value } = await inquirer.prompt([
-            {
-                type: 'input',
-                name: 'value',
-                message: `Enter value for ${field} ${unitDisplay} [${statusDisplay}]${existing ? ` (current: ${existing.value})` : ''}:`,
-                default: existing?.value?.toString(),
-                validate: (input) => {
-                    if (input === '') return true;
-                    return !isNaN(Number(input)) && Number(input) > 0 ? true : 'Must be a number greater than 0';
-                },
-            },
-        ]);
+  // If value didn't change
+  if (existing && newValue === existing.value) {
+    return false; // No changes made
+  }
 
-        let finalValue = value === '' && existing ? existing.value : parseFloat(value);
+  // If the field is already approved, warn the user that changing will reset to TBD
+  if (approvalStatus && existing) {
+    const { confirm } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "confirm",
+        message: `${field} is currently approved (OK). Changing the value will reset approval to In TBD. Continue?`,
+        default: false,
+      }
+    ]);
 
-        // If field is approved and value is changed, ask for confirmation after input
-        if (approvalStatus && existing && finalValue !== existing.value) {
-            const { confirm } = await inquirer.prompt([
-                {
-                    type: 'confirm',
-                    name: 'confirm',
-                    message: `${field} is currently approved. Changing the value will reset approval to TBD. Continue?`,
-                    default: false,
-                },
-            ]);
-            if (!confirm) {
-                console.log(chalk.blueBright(`\n => Keeping current value for ${field}.\n`));
-                finalValue = existing.value;
-            }
-        }
+    if (!confirm) {
+      console.log(chalk.blueBright(`\n => Keeping current value for ${field}.\n`));
+      return false; // No changes made
+    }
+  }
 
-        inputs[field] = finalValue;
+  // Start a transaction for all database operations
+  const transaction = await sequelize.transaction();
+
+  try {
+    // Store the value immediately
+    await upsertInput(SESSION_ID, TEAM_ID, field, {
+      value: newValue,
+      outputId,
+    } as ExtendedInputRaw, transaction);
+
+    // If we're changing an approved field, update the approval to false
+    if (approvalStatus) {
+      await upsertApproval(SESSION_ID, TEAM_ID, field, {
+        isApproved: false
+      }, transaction);
     }
 
-    return inputs;
-};
+    // Calculate valuation with updated values
+    const { inputs: updatedInputs } = await getSessionContext(
+      SESSION_ID,
+      TEAM_ID
+    );
+    const inputValues = Object.fromEntries(
+      updatedInputs.map((input) => [input.fieldName, input.value])
+    );
 
-const storeInputs = async (inputs: Record<string, number>, teamId: number) => {
-    // transaction
-    await sequelize.transaction(async (transaction) => {
-        for (const field of Object.keys(inputs)) {
-            // Get existing input to check if value changed
-            const existing = await Input.findOne({
-                where: {
-                    teamId,
-                    fieldName: field,
-                    sessionId: SESSION_ID
-                },
-                transaction,
-            });
+    // Only calculate if we have all required fields
+    let valuation = 0;
+    const missingFields = Input.FIELDS.filter(
+      (f) => !updatedInputs.find((i) => i.fieldName === f)
+    );
 
-            const shouldResetApproval = existing && inputs[field] !== existing.value;
+    if (missingFields.length === 0) {
+      valuation = calculateValuation(inputValues);
+      await upsertOutput(SESSION_ID, TEAM_ID, {
+        value: valuation,
+        isApproved: false,
+      } as ExtendedOutputRaw, transaction);
 
-            if (existing) {
-                await Input.update({
-                    value: inputs[field],
-                }, {
-                    where: { id: existing.id },
-                    transaction,
-                });
-
-                if (shouldResetApproval) {
-                    // Update the approval
-                    await Approval.update({
-                        status: false,
-                    }, {
-                        where: {
-                            teamId,
-                            fieldName: field,
-                            sessionId: SESSION_ID
-                        },
-                        transaction,
-                    });
-                }
-            } else {
-                await Input.create({
-                    teamId,
-                    fieldName: field,
-                    value: inputs[field],
-                    sessionId: SESSION_ID
-                }, {
-                    transaction,
-                });
-
-                // Create the approval
-                await Approval.create({
-                    teamId,
-                    fieldName: field,
-                    status: false,
-                    sessionId: SESSION_ID
-                }, {
-                    transaction,
-                });
+      console.log(
+        chalk.green(
+          `\n => Updated ${field} to ${newValue}. New valuation: ${valuation.toLocaleString(
+            "en-US",
+            {
+              maximumFractionDigits: 2,
             }
-        }
-    });
+          )} M$\n`
+        )
+      );
+      console.log(
+        chalk.blueBright(`Final output status: ${chalk.yellow("[In TBD]")}\n`)
+      );
+    } else {
+      console.log(chalk.green(`\n => Updated ${field} to ${newValue}.\n`));
+      console.log(chalk.yellow(`Still missing: ${missingFields.join(", ")}\n`));
+      console.log(
+        chalk.blueBright(`Final output status: ${chalk.yellow("[In TBD]")}\n`)
+      );
+    }
+
+    // Commit the transaction
+    await transaction.commit();
+
+    // Pause to let user see the update message
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    return true; // Changes were made
+  } catch (error) {
+    // Rollback the transaction in case of error
+    await transaction.rollback();
+    console.error("Error updating field:", error);
+    return false;
+  }
 };
 
 const calculateValuation = (inputs: Record<string, number>) => {
-    return inputs['EBITDA'] * inputs['Multiple'] * inputs['Factor Score'];
+  return inputs["EBITDA"] * inputs["Multiple"] * inputs["Factor Score"];
 };
 
-const pollApprovalStatus = async (
-    fields: string[],
-    teamId: number,
-    exitWhenComplete = true
-) => {
-    return new Promise<boolean>((resolve) => {
-        const interval = setInterval(async () => {
-            try {
-                // Get latest values from database for each field
-                const latestInputs: Record<string, number> = {};
-                for (const field of fields) {
-                    const latest = await Input.findOne({
-                        where: {
-                            teamId,
-                            fieldName: field,
-                            sessionId: SESSION_ID
-                        },
-                        order: [['updatedAt', 'DESC']],
-                        raw: true
-                    });
-                    if (latest) {
-                        latestInputs[field] = latest.value;
-                    }
-                }
+/**
+ * Setup the polling to refresh data periodically
+ */
+const startPolling = async (outputId: string) => {
+  // Clear any existing interval
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+  }
+  
+  // Set up keyboard listener only once
+  let keypressListenerActive = false;
+  
+  pollingInterval = setInterval(async () => {
+    // Only update the display when not in editing mode
+    if (!isEditing) {
+      try {
+        // Get current data
+        const {
+          inputs: existingInputs,
+          approvals: existingApprovals,
+          outputs: existingOutputs,
+          isAllApprovalsApproved,
+        } = await getSessionContext(SESSION_ID, TEAM_ID);
 
-                const approvals = await Approval.findAll({
-                    where: {
-                        teamId: TEAM_ID,
-                        sessionId: SESSION_ID
-                    },
-                    raw: true
-                });
+        // Clear screen and show data
+        console.clear();
+        console.log(displayInputTable(existingInputs, existingApprovals));
 
-                let approvedCount = 0;
-                console.clear();
-                console.log('** Awaiting approvals from Team 2 (renew every 1.5s) **\n');
+        // Calculate valuation and show status
+        const missingFields = Input.FIELDS.filter(
+          (field) => !existingInputs.find((i) => i.fieldName === field)
+        );
 
-                // Calculate current valuation using the latest inputs from DB
-                const currentValuation = calculateValuation(latestInputs);
+        // Check both the approval status and the output status
+        const isFinalApproved = isAllApprovalsApproved && 
+          existingOutputs.length > 0 && 
+          existingOutputs[0].isApproved;
+          
+        const statusText = isFinalApproved ? "OK" : "In TBD";
+        const statusColor = isFinalApproved ? chalk.green : chalk.yellow;
+        console.log(
+          chalk.blueBright(
+            `Final output status: ${statusColor(`[${statusText}]`)}\n`
+          )
+        );
 
-                console.log(chalk.blueBright(`($$$) Current Valuation: ${currentValuation.toLocaleString('en-US')} M$ \n`));
+        if (missingFields.length === 0) {
+          const inputValues = Object.fromEntries(
+            existingInputs.map((input) => [input.fieldName, input.value])
+          );
+          const valuation = calculateValuation(inputValues);
+          console.log(
+            chalk.blueBright(
+              `Current Valuation: ${valuation.toLocaleString("en-US", {
+                maximumFractionDigits: 2,
+              })} M$\n`
+            )
+          );
+        } else {
+          console.log(
+            chalk.yellow(`Missing fields: ${missingFields.join(", ")}\n`)
+          );
+        }
+        
+        // Check if all approvals are true and show status
+        if (isAllApprovalsApproved && existingOutputs.length > 0 && existingOutputs[0].isApproved) {
+          console.log(
+            chalk.green("\n => All fields have been approved and output is finalized.\n")
+          );
+        }
 
-                console.log(chalk.blueBright(`--------------------------------\n`));
-                for (let index = 0; index < fields.length; index++) {
-                    const field = fields[index];
-                    const unit = units[index];
-                    const match = approvals.find((a) => a.fieldName === field);
-                    const status = match?.status;
-                    const currentValue = latestInputs[field];
-                    const unitDisplay = unit ? `(${unit})` : '';
-
-                    if (status) {
-                        approvedCount++;
-                        console.log(chalk.green(`${field} ${unitDisplay}: ${currentValue} - OK`));
-                    } else {
-                        console.log(chalk.yellow(`${field} ${unitDisplay}: ${currentValue} - TBD...`));
-                    }
-                }
-                console.log(chalk.blueBright(`--------------------------------\n`));
-
-                const currentOutput = await Output.findOne({
-                    where: {
-                        inputTeamId: TEAM_ID,
-                        sessionId: SESSION_ID
-                    },
-                    raw: true,
-                });
-
-                console.log(chalk.blueBright(`Current approval status: ${currentOutput?.isApproved ? '[APPROVED]' : '[In TBD]'}`));
-
-                if (approvedCount === fields.length && exitWhenComplete && currentOutput?.isApproved) {
-                    clearInterval(interval);
-                    console.log(chalk.greenBright('\n => All fields approved. Final output is confirmed.\n'));
-
-                    // Start countdown
-                    let secondsLeft = 10;
-                    const countdownInterval = setInterval(() => {
-                        process.stdout.write('\x1b[?25l');
-                        process.stdout.write('\x1b[2K');
-                        process.stdout.write('\x1b[1A');
-                        process.stdout.write('\x1b[2K');
-                        process.stdout.write('\x1b[1A');
-                        process.stdout.write('\x1b[2K');
-                        console.log(chalk.blueBright(` => All fields approved. Final output is confirmed.`));
-                        console.log(chalk.blueBright(` => Application will close in ${secondsLeft} seconds...`));
-                        secondsLeft--;
-
-                        if (secondsLeft < 0) {
-                            process.stdout.write('\x1b[?25h');
-                            clearInterval(countdownInterval);
-                            process.exit(0);
-                        }
-                    }, 1000);
-
-                    resolve(false);
-                }
-
-                console.log(chalk.gray('\nPress "E" to edit values, "ESC" to exit, or wait for Team 2 approval...\n'));
-
-                process.stdin.setRawMode(true);
-                process.stdin.resume();
-                process.stdin.once('data', (data) => {
-                    const key = data.toString();
-                    if (key === 'e' || key === 'E') {
-                        console.clear();
-                        clearInterval(interval);
-                        process.stdin.setRawMode(false);
-                        console.log(chalk.blueBright('\n => Returning to input mode...\n'));
-                        resolve(true);
-                    } else if (key === '\u001b') {
-                        console.clear();
-                        clearInterval(interval);
-                        process.stdin.setRawMode(false);
-                        console.log(chalk.blueBright('\n => Exiting application...\n'));
-                        closeDb();
-                        process.exit(0);
-                    }
-                });
-            } catch (error) {
-                console.error('Error in polling:', error);
-                clearInterval(interval);
-                closeDb().then(() => process.exit(1));
+        // Show hint for editing
+        console.log(chalk.gray('(Auto-refreshing data every 1.5 seconds)'));
+        console.log(chalk.gray('Press "E" to edit fields, "Q" to quit...\n'));
+        
+        // Setup keyboard listener if not already set
+        if (!keypressListenerActive) {
+          keypressListenerActive = true;
+          
+          const handleKeypress = (data: Buffer) => {
+            const key = data.toString().toLowerCase();
+            
+            if (key === 'e') {
+              // Stop listening
+              process.stdin.setRawMode(false);
+              process.stdin.pause();
+              process.stdin.removeListener('data', handleKeypress);
+              keypressListenerActive = false;
+              
+              // Start editing
+              isEditing = true;
+              showEditMenu(outputId).then(() => {
+                // Return to polling after editing
+                isEditing = false;
+              });
+            } else if (key === 'q') {
+              // Quit application
+              console.clear();
+              console.log("\nThank you for using the Financial Terms Calculator!\n");
+              if (pollingInterval) clearInterval(pollingInterval);
+              process.stdin.setRawMode(false);
+              process.stdin.pause();
+              process.stdin.removeListener('data', handleKeypress);
+              keypressListenerActive = false;
+              closeDb().then(() => process.exit(0));
             }
-        }, pollingRefreshRateInMs);
-    });
+          };
+          
+          process.stdin.setRawMode(true);
+          process.stdin.resume();
+          process.stdin.on('data', handleKeypress);
+        }
+      } catch (error) {
+        console.error("Error during polling:", error);
+      }
+    }
+  }, POLLING_INTERVAL);
+};
+
+/**
+ * Displays the menu and handles field editing
+ */
+const showEditMenu = async (outputId: string): Promise<void> => {
+  try {
+    // Get current data
+    const {
+      inputs: existingInputs,
+      approvals: existingApprovals,
+      outputs: existingOutputs,
+      isAllApprovalsApproved,
+    } = await getSessionContext(SESSION_ID, TEAM_ID);
+    
+    // Clear screen and display table
+    console.clear();
+    console.log(displayInputTable(existingInputs, existingApprovals));
+    
+    // Show status and valuation
+    const missingFields = Input.FIELDS.filter(
+      (field) => !existingInputs.find((i) => i.fieldName === field)
+    );
+    
+    // Check both the approval status and the output status
+    const isFinalApproved = isAllApprovalsApproved && 
+      existingOutputs.length > 0 && 
+      existingOutputs[0].isApproved;
+      
+    const statusText = isFinalApproved ? "OK" : "In TBD";
+    const statusColor = isFinalApproved ? chalk.green : chalk.yellow;
+    console.log(
+      chalk.blueBright(
+        `Final output status: ${statusColor(`[${statusText}]`)}\n`
+      )
+    );
+    
+    if (missingFields.length === 0) {
+      const inputValues = Object.fromEntries(
+        existingInputs.map((input) => [input.fieldName, input.value])
+      );
+      const valuation = calculateValuation(inputValues);
+      console.log(
+        chalk.blueBright(
+          `Current Valuation: ${valuation.toLocaleString("en-US", {
+            maximumFractionDigits: 2,
+          })} M$\n`
+        )
+      );
+    } else {
+      console.log(
+        chalk.yellow(`Missing fields: ${missingFields.join(", ")}\n`)
+      );
+    }
+    
+    // Check if all approvals are true and show status
+    if (isAllApprovalsApproved && existingOutputs.length > 0 && existingOutputs[0].isApproved) {
+      console.log(
+        chalk.green("\n => All fields have been approved and output is finalized.\n")
+      );
+      
+      const { continueEditing } = await inquirer.prompt([
+        {
+          type: "confirm",
+          name: "continueEditing",
+          message: "All approvals complete. Continue editing?",
+          default: false,
+        },
+      ]);
+      
+      if (!continueEditing) {
+        console.log("\nThank you for using the Financial Terms Calculator!\n");
+        if (pollingInterval) clearInterval(pollingInterval);
+        await closeDb();
+        process.exit(0);
+      }
+    }
+    
+    // Let user select field to edit
+    const choices = [
+      ...Input.FIELDS.map((field, index) => ({
+        name: `${index + 1}. ${field} ${
+          Input.UNITS[index] ? `(${Input.UNITS[index]})` : ""
+        }`,
+        value: field,
+      })),
+      { name: "Return to polling view", value: "return" },
+      { name: "Exit", value: "exit" },
+    ];
+    
+    const { action } = await inquirer.prompt([
+      {
+        type: "list",
+        name: "action",
+        message: "Select a field to edit:",
+        choices,
+      },
+    ]);
+    
+    // Handle user choice
+    if (action === "exit") {
+      // Exit application
+      console.log("\nThank you for using the Financial Terms Calculator!\n");
+      if (pollingInterval) clearInterval(pollingInterval);
+      await closeDb();
+      process.exit(0);
+    } else if (action === "return") {
+      // Return to polling view
+      return;
+    } else {
+      // Edit the selected field
+      const changes = await editField(
+        action as (typeof Input.FIELDS)[number],
+        existingInputs,
+        outputId
+      );
+      
+      // If changes were made, return to polling view
+      if (changes) {
+        return;
+      } else {
+        // If no changes, continue in edit menu
+        return showEditMenu(outputId);
+      }
+    }
+  } catch (error) {
+    console.error("Error in edit menu:", error);
+  }
 };
 
 const main = async () => {
-    try {
-        await initDb();
-        console.log('\n** TEAM 1 CLI – Enter Your Financial Terms **\n');
-        console.log(chalk.blueBright(`Session ID: ${SESSION_ID}\n`));
+  try {
+    await initDb();
+    console.log("\n** TEAM 1 CLI – Enter Your Financial Terms **\n");
+    console.log(chalk.blueBright(`Session ID: ${SESSION_ID}\n`));
 
-        while (true) {
-            const inputs = await askInputs(TEAM_ID);
-            await storeInputs(inputs, TEAM_ID);
+    // Get session context which now creates any missing records
+    const { outputId } = await getSessionContext(SESSION_ID, TEAM_ID);
 
-            const valuation = calculateValuation(inputs);
-            console.log(`\n($$$) Valuation: ${valuation.toLocaleString('en-US')} M$`);
+    // Start polling and allow editing
+    await startPolling(outputId);
 
-            const needToEdit = await pollApprovalStatus(Object.keys(inputs), TEAM_ID);
-            if (!needToEdit) {
-                const { again } = await inquirer.prompt({
-                    type: 'confirm',
-                    name: 'again',
-                    message: 'Start new simulation?',
-                });
-                if (!again) break;
-            }
-        }
-
-        console.log('\n => Team 1 finished input. Waiting for Team 2 approval...\n');
-    } catch (error) {
-        console.error('Error in Team 1:', error);
-    } finally {
-        await closeDb();
-    }
+  } catch (error) {
+    console.error("Error:", error);
+    if (pollingInterval) clearInterval(pollingInterval);
+    await closeDb();
+  }
 };
 
-main(); 
+// Handle exit signals for cleanup
+process.on('SIGINT', async () => {
+  console.log("\nExiting application...");
+  if (pollingInterval) clearInterval(pollingInterval);
+  await closeDb();
+  process.exit(0);
+});
+
+main();

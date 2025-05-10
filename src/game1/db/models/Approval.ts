@@ -6,7 +6,7 @@ export class Approval extends Model {
   public sessionId!: string;
   public teamId!: number;
   public fieldName!: string;
-  public status!: boolean;
+  public isApproved!: boolean;
   public readonly updatedAt!: Date;
 }
 
@@ -28,10 +28,11 @@ Approval.init({
     type: DataTypes.STRING,
     allowNull: false,
   },
-  status: {
+  isApproved: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false,
+    field: 'status', // Database column name
   },
 }, {
   sequelize,
@@ -44,4 +45,13 @@ Approval.init({
       name: 'unique_session_team_field_approval'
     }
   ]
-}); 
+});
+
+export type ApprovalRaw = {
+  id: string;
+  sessionId: string;
+  teamId: number;
+  fieldName: string;
+  isApproved: boolean;
+  updatedAt: Date;
+};

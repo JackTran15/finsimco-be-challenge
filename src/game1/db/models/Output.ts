@@ -1,5 +1,6 @@
 import { DataTypes, Model } from 'sequelize';
 import { sequelize } from '../sequelize';
+import { Input } from './Input';
 
 export class Output extends Model {
   public id!: string;
@@ -21,6 +22,7 @@ Output.init({
   sessionId: {
     type: DataTypes.STRING,
     allowNull: false,
+    defaultValue: 'default_session',
   },
   inputTeamId: {
     type: DataTypes.INTEGER,
@@ -29,6 +31,7 @@ Output.init({
   valuation: {
     type: DataTypes.FLOAT,
     allowNull: false,
+    defaultValue: 0,
   },
   isApproved: {
     type: DataTypes.BOOLEAN,
@@ -38,6 +41,7 @@ Output.init({
   generatedAt: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
+    allowNull: false,
   },
 }, {
   sequelize,
@@ -47,10 +51,26 @@ Output.init({
   indexes: [
     {
       unique: true,
-      fields: ['sessionId'],
-      name: 'unique_session_output'
+      fields: ['sessionId', 'inputTeamId'],
+      name: 'unique_session_input_team_output'
     }
   ]
+});
+
+Output.hasMany(Input, {
+  foreignKey: {
+    name: 'outputId',
+    allowNull: false
+  },
+  as: 'inputs'
+});
+
+Input.belongsTo(Output, {
+  foreignKey: {
+    name: 'outputId',
+    allowNull: false
+  },
+  as: 'output'
 });
 
 // Export the raw type that includes all fields
@@ -64,6 +84,3 @@ export type OutputRaw = {
   createdAt: Date;
   updatedAt: Date;
 };
-
-// Keep the existing type for backward compatibility
-export type OutputDataValues = Output['dataValues'];

@@ -12,15 +12,14 @@ export const initDb = async () => {
             await sequelize.authenticate();
             console.log('Database connection has been established successfully.');
             
-            // Sync all models
-            await sequelize.sync();
-            console.log('Database models synchronized successfully.');
+            await sequelize.sync({ force: false });
+            console.log('Database models synchronized successfully (existing data preserved).');
             return;
         } catch (error) {
             console.error(`Unable to connect to the database (${retries} retries left):`, error);
             retries--;
             if (retries === 0) throw error;
-            await wait(5000); // Wait 5 seconds before retrying
+            await wait(5000);
         }
     }
 };

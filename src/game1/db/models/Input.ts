@@ -7,8 +7,12 @@ export class Input extends Model {
   public teamId!: number;
   public fieldName!: string;
   public value!: number;
+  public outputId!: string;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
+
+  static readonly FIELDS = ['EBITDA', 'Interest Rate', 'Multiple', 'Factor Score'] as const;
+  static readonly UNITS = ['M$', '%', 'x', ''] as const;
 }
 
 Input.init({
@@ -33,6 +37,14 @@ Input.init({
     type: DataTypes.FLOAT,
     allowNull: false,
   },
+  outputId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: 'outputs',
+      key: 'id'
+    }
+  }
 }, {
   sequelize,
   modelName: 'Input',
@@ -45,3 +57,14 @@ Input.init({
     }
   ]
 }); 
+
+export type InputRaw = {
+  id: string;
+  sessionId: string;
+  teamId: number;
+  fieldName: string;
+  value: number;
+  outputId: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
