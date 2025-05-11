@@ -25,108 +25,134 @@ const setFieldApproval = async (
     const existing = existingApprovals.find((approval) => approval.fieldName === field);
     const currentStatus = existing?.isApproved;
     
-    // Let user choose the status explicitly
-    const { newStatus } = await inquirer.prompt([
-        {
-            type: "list",
-            name: "newStatus",
-            message: `Select approval status for ${field}:`,
-            choices: [
-                { name: "OK", value: true },
-                { name: "TBD", value: false }
-            ],
-            default: currentStatus ? 0 : 1 // Default to current status
+    // Set up ESC key handler for cancellation
+    const escHandler = (data: Buffer) => {
+        if (data.toString() === '\u001b') {
+            process.stdin.setRawMode(false);
+            process.stdin.pause();
+            process.stdin.removeListener('data', escHandler);
+            process.exit(0);
         }
-    ]);
-    
-    // If status didn't change
-    if (newStatus === currentStatus) {
-        console.log(chalk.blueBright(`\n => ${field} status unchanged.\n`));
-        return false; // No changes made
-    }
-    
-    // Start a transaction for all database operations
-    const transaction = await sequelize.transaction();
-    
+    };
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on('data', escHandler);
+
     try {
-        // Update the approval
-        await upsertApproval(SESSION_ID, TEAM_ID, field, {
-            isApproved: newStatus
-        }, transaction);
+        // Let user choose the status explicitly
+        const { newStatus } = await inquirer.prompt([
+            {
+                type: "list",
+                name: "newStatus",
+                message: `Select approval status for ${field} (Press ESC to cancel):`,
+                choices: [
+                    { name: "OK", value: true },
+                    { name: "TBD", value: false }
+                ],
+                default: currentStatus ? 0 : 1 // Default to current status
+            }
+        ]);
         
-        // Get updated data to check if all fields are approved
-        const { 
-            inputs: updatedInputs,
-            approvals: updatedApprovals, 
-            isAllApprovalsApproved 
-        } = await getSessionContext(
-            SESSION_ID,
-            TEAM_ID
-        );
+        // Remove ESC handler after prompt
+        process.stdin.removeListener('data', escHandler);
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
         
-        // Refresh the display
-        console.clear();
-        console.log(displayInputTable(updatedInputs, updatedApprovals));
-        
-        console.log(
-            chalk.green(`\n => ${field} is now ${newStatus ? "OK" : "In TBD"}.\n`)
-        );
-        
-        // If all fields are approved, update the output status
-        if (isAllApprovalsApproved) {
-            await upsertOutput(SESSION_ID, TEAM_ID, {
-                isApproved: true
-            } as ExtendedOutputRaw, transaction);
-            
-            console.log(
-                chalk.green(`\n => All fields approved! Final output is now OK.\n`)
-            );
-        } else {
-            // If not all approved, ensure output is marked as not approved
-            await upsertOutput(SESSION_ID, TEAM_ID, {
-                isApproved: false
-            } as ExtendedOutputRaw, transaction);
-            
-            console.log(
-                chalk.blueBright(`Final output status: ${chalk.yellow("[In TBD]")}\n`)
-            );
+        // If status didn't change
+        if (newStatus === currentStatus) {
+            console.log(chalk.blueBright(`\n => ${field} status unchanged.\n`));
+            return false; // No changes made
         }
         
-        // Display valuation if all inputs are available
-        const missingFields = Input.FIELDS.filter(
-            (f) => !updatedInputs.find((i) => i.fieldName === f)
-        );
+        // Start a transaction for all database operations
+        const transaction = await sequelize.transaction();
         
-        if (missingFields.length === 0) {
-            const inputValues = Object.fromEntries(
-                updatedInputs.map((input) => [input.fieldName, input.value])
+        try {
+            // Update the approval
+            await upsertApproval(SESSION_ID, TEAM_ID, field, {
+                isApproved: newStatus
+            }, transaction);
+            
+            // Get updated data to check if all fields are approved
+            const { 
+                inputs: updatedInputs,
+                approvals: updatedApprovals, 
+                isAllApprovalsApproved 
+            } = await getSessionContext(
+                SESSION_ID,
+                TEAM_ID
             );
-            const valuation = 
-                inputValues["EBITDA"] * 
-                inputValues["Multiple"] * 
-                inputValues["Factor Score"];
+            
+            // Refresh the display
+            console.clear();
+            console.log(displayInputTable(updatedInputs, updatedApprovals));
             
             console.log(
-                chalk.blueBright(
-                    `Current Valuation: ${valuation.toLocaleString("en-US", {
-                        maximumFractionDigits: 2,
-                    })} M$\n`
-                )
+                chalk.green(`\n => ${field} is now ${newStatus ? "OK" : "In TBD"}.\n`)
             );
+            
+            // If all fields are approved, update the output status
+            if (isAllApprovalsApproved) {
+                await upsertOutput(SESSION_ID, TEAM_ID, {
+                    isApproved: true
+                } as ExtendedOutputRaw, transaction);
+                
+                console.log(
+                    chalk.green(`\n => All fields approved! Final output is now OK.\n`)
+                );
+            } else {
+                // If not all approved, ensure output is marked as not approved
+                await upsertOutput(SESSION_ID, TEAM_ID, {
+                    isApproved: false
+                } as ExtendedOutputRaw, transaction);
+                
+                console.log(
+                    chalk.blueBright(`Final output status: ${chalk.yellow("[In TBD]")}\n`)
+                );
+            }
+            
+            // Display valuation if all inputs are available
+            const missingFields = Input.FIELDS.filter(
+                (f) => !updatedInputs.find((i) => i.fieldName === f)
+            );
+            
+            if (missingFields.length === 0) {
+                const inputValues = Object.fromEntries(
+                    updatedInputs.map((input) => [input.fieldName, input.value])
+                );
+                const valuation = 
+                    inputValues["EBITDA"] * 
+                    inputValues["Multiple"] * 
+                    inputValues["Factor Score"];
+                
+                console.log(
+                    chalk.blueBright(
+                        `Current Valuation: ${valuation.toLocaleString("en-US", {
+                            maximumFractionDigits: 2,
+                        })} M$\n`
+                    )
+                );
+            }
+            
+            // Commit the transaction
+            await transaction.commit();
+            
+            // Pause to let user see the update message
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            return true; // Changes were made
+        } catch (error) {
+            // Rollback the transaction in case of error
+            await transaction.rollback();
+            console.error("Error updating approval:", error);
+            return false;
         }
-        
-        // Commit the transaction
-        await transaction.commit();
-        
-        // Pause to let user see the update message
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        return true; // Changes were made
     } catch (error) {
-        // Rollback the transaction in case of error
-        await transaction.rollback();
-        console.error("Error updating approval:", error);
-        return false;
+        // Remove ESC handler in case of error
+        process.stdin.removeListener('data', escHandler);
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+        throw error;
     }
 };
 
