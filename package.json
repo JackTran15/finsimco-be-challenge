@@ -14,6 +14,10 @@
     "start:game1:team2": "node dist/game1/team2.js",
     "start:game2:team1": "node dist/game2/team1.js",
     "start:game2:team2": "node dist/game2/team2.js",
+    "dev:reset:game1": "ts-node src/game1/reset.ts",
+    "dev:reset:game2": "ts-node src/game2/reset.ts",
+    "start:reset:game1": "node dist/game1/reset.js",
+    "start:reset:game2": "node dist/game2/reset.js",
     "test": "jest"
   },
   "keywords": [],
