@@ -237,7 +237,7 @@ const startPolling = async (outputId: string) => {
 
         // Show hint for editing
         console.log(chalk.gray('(Auto-refreshing data every 1.5 seconds)'));
-        console.log(chalk.gray('Press "E" to edit fields, "Q" to quit...\n'));
+        console.log(chalk.gray('Press "E" to edit fields, "ESC" to quit...\n'));
         
         // Setup keyboard listener if not already set
         if (!keypressListenerActive) {
@@ -259,7 +259,7 @@ const startPolling = async (outputId: string) => {
                 // Return to polling after editing
                 isEditing = false;
               });
-            } else if (key === 'q') {
+            } else if (key === '\u001b') {
               // Quit application
               console.clear();
               console.log("\nThank you for using the Financial Terms Calculator!\n");

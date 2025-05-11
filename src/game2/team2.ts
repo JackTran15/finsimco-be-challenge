@@ -126,7 +126,7 @@ const startPolling = async () => {
         // Display bidding results
         displayBiddingResults(outputs);
 
-        console.log(chalk.blueBright("\nPress 'e' to place a bid, 'ESC' to quit"));
+        console.log(chalk.gray(`\nPress "E" to edit fields, "ESC" to quit...`));
         console.log(chalk.gray("(Auto-refreshing data every 1.5 seconds)"));
 
         // Setup keyboard listener if not already set

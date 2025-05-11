@@ -90,7 +90,7 @@ const startPolling = async () => {
         displayCompanyPricing(companies, "Company Pricing (Team 1)");
         displayBiddingResults(outputs);
 
-        console.log(chalk.blueBright("\nPress 'e' to edit company pricing, 'ESC' to quit"));
+        console.log(chalk.gray(`\nPress "E" to edit fields, "Q" to quit...`));
         console.log(chalk.gray('(Auto-refreshing data every 1.5 seconds)'));
         
         if (!keypressListenerActive) {

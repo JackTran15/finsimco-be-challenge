@@ -335,7 +335,7 @@ const main = async () => {
                     }
 
                     console.log(chalk.gray('(Auto-refreshing data every 1.5 seconds)'));
-                    console.log(chalk.gray('Press "E" to modify approvals, "Q" to quit...'));
+                    console.log(chalk.gray('Press "E" to modify approvals, "ESC" to quit...\n'));
 
                     // Setup keyboard listener if not already set
                     if (!keypressListenerActive) {
@@ -357,10 +357,10 @@ const main = async () => {
                                     // Return to polling after editing
                                     isEditing = false;
                                 });
-                            } else if (key === 'q') {
+                            } else if (key === '\u001b') {
                                 // Quit application
                                 console.clear();
-                                console.log("\nThank you for reviewing the Financial Terms!\n");
+                                console.log("\nThank you for using the Financial Terms Calculator!\n");
                                 clearInterval(polling);
                                 process.stdin.setRawMode(false);
                                 process.stdin.pause();
